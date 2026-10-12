@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Photo Editor</title>
+<style>
+:root{--bg:#d9d7d2;--panel:#f6f5f2;--ink:#1f1d1a;--mute:#6d6a63;--line:#cfccc5;--accent:#c8402b;--accent-ink:#fff;--stage:#bdbab3;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1a18;--panel:#242321;--ink:#ecebe7;--mute:#9b978f;--line:#3a3834;--accent:#e2573f;--stage:#121110}}
+:root[data-theme="dark"]{--bg:#1b1a18;--panel:#242321;--ink:#ecebe7;--mute:#9b978f;--line:#3a3834;--accent:#e2573f;--stage:#121110}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.4 "Avenir Next","Segoe UI",Helvetica,Arial,sans-serif}
+.app{display:grid;grid-template-columns:1fr 320px;min-height:100vh}
+.stage{background:var(--stage);display:flex;align-items:center;justify-content:center;padding:20px;min-height:50vh;position:relative}
+canvas{max-width:100%;max-height:calc(100vh - 40px);box-shadow:0 2px 18px rgba(0,0,0,.35);display:none;background:#fff}
+.drop{border:2px dashed var(--mute);border-radius:10px;padding:48px 28px;text-align:center;max-width:380px;color:var(--mute)}
+.drop.over{border-color:var(--accent);color:var(--accent)}
+.drop h1{font-size:22px;margin:0 0 6px;color:var(--ink);font-weight:600}
+.drop p{margin:0 0 18px}
+.side{background:var(--panel);border-left:1px solid var(--line);padding:16px;overflow-y:auto;max-height:100vh}
+h2{font-size:13px;font-weight:600;margin:18px 0 8px;color:var(--mute)}
+h2:first-child{margin-top:0}
+button,.btn{font:inherit;border:1px solid var(--line);background:var(--panel);color:var(--ink);padding:7px 11px;border-radius:6px;cursor:pointer}
+button:hover,.btn:hover{border-color:var(--mute)}
+button:focus-visible,input:focus-visible,.btn:focus-within{outline:2px solid var(--accent);outline-offset:2px}
+.primary{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);font-weight:600}
+.row{display:flex;flex-wrap:wrap;gap:6px}
+.row button.on{border-color:var(--accent);color:var(--accent);font-weight:600}
+.ctl{margin:10px 0}
+.ctl label{display:flex;justify-content:space-between;font-size:13px;margin-bottom:2px}
+.ctl output{color:var(--mute);font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;accent-color:var(--accent)}
+.hide{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
+.bar{display:flex;gap:6px;margin-top:18px}
+.bar .primary{flex:1}
+.hint{font-size:12px;color:var(--mute);margin:8px 0 0}
+.modal{position:fixed;inset:0;background:rgba(0,0,0,.8);display:none;align-items:center;justify-content:center;flex-direction:column;gap:12px;padding:20px;z-index:9}
+.modal.open{display:flex}
+.modal img{max-width:100%;max-height:70vh;background:#fff}
+.modal p{color:#fff;margin:0;text-align:center}
+@media (max-width:760px){.app{grid-template-columns:1fr}.side{border-left:0;border-top:1px solid var(--line);max-height:none}canvas{max-height:60vh}}
+</style>
+</head>
+<body>
+<div class="app">
+  <main class="stage" id="stage">
+    <div class="drop" id="drop">
+      <h1>Open a photo to edit</h1>
+      <p>Drop an image here, or choose one from your device.</p>
+      <label class="btn primary">Choose photo<input class="hide" type="file" id="file" accept="image/*"></label>
+    </div>
+    <canvas id="cv"></canvas>
+  </main>
+  <aside class="side">
+    <h2>Looks</h2>
+    <div class="row" id="presets"></div>
+    <h2>Adjust</h2>
+    <div id="sliders"></div>
+    <h2>Crop</h2>
+    <div class="row" id="crops"></div>
+    <h2>Rotate and flip</h2>
+    <div class="row">
+      <button id="rl">Rotate left</button><button id="rr">Rotate right</button>
+      <button id="fh">Flip horizontal</button><button id="fv">Flip vertical</button>
+    </div>
+    <div class="bar">
+      <button id="cmp" title="Hold to see the original">Hold to compare</button>
+      <button id="reset">Reset all</button>
+    </div>
+    <div class="bar"><button class="primary" id="save">Save photo</button><label class="btn">New photo<input class="hide" type="file" id="file2" accept="image/*"></label></div>
+    <p class="hint">Double-click a slider to reset it. Large photos are scaled to 2400 px on the long edge.</p>
+  </aside>
+</div>
+<div class="modal" id="modal">
+  <img id="out" alt="Edited photo">
+  <p>Press and hold the photo (or right-click it) and choose Save image.</p>
+  <div class="row"><a class="btn primary" id="dl" download="edited-photo.png" style="text-decoration:none">Download PNG</a><button id="close">Close</button></div>
+</div>
+<script>
+(function(){
+var cv=document.getElementById('cv'),ctx=cv.getContext('2d'),img=null;
+var DEF={b:100,c:100,s:100,h:0,w:0,g:0,bl:0};
+var S=Object.assign({rot:0,fx:1,fy:1,ratio:0},DEF);
+var SL=[['b','Brightness',0,200,'%'],['c','Contrast',0,200,'%'],['s','Saturation',0,300,'%'],['h','Hue',-180,180,'°'],['w','Warmth',0,100,'%'],['g','Black and white',0,100,'%'],['bl','Blur',0,10,'px']];
+var PRE=[['Original',{}],['Vivid',{c:115,s:140}],['Warm',{w:35,b:105,s:110}],['Cool',{h:-20,s:95,b:102}],['Fade',{c:85,b:112,s:80}],['Mono',{g:100,c:115}],['Noir',{g:100,c:140,b:90}]];
+var CR=[['Full',0],['1:1',1],['4:3',4/3],['3:4',3/4],['16:9',16/9]];
+var sl=document.getElementById('sliders'),inputs={};
+SL.forEach(function(d){
+  var k=d[0],div=document.createElement('div');div.className='ctl';
+  div.innerHTML='<label for="s_'+k+'">'+d[1]+'<output id="o_'+k+'"></output></label><input type="range" id="s_'+k+'" min="'+d[2]+'" max="'+d[3]+'" step="1">';
+  sl.appendChild(div);
+  var inp=div.querySelector('input');inputs[k]=inp;
+  inp.addEventListener('input',function(){S[k]=+inp.value;sync();draw()});
+  inp.addEventListener('dblclick',function(){S[k]=DEF[k];sync();draw()});
+});
+function sync(){SL.forEach(function(d){var k=d[0];inputs[k].value=S[k];document.getElementById('o_'+k).textContent=S[k]+d[4]})}
+var pr=document.getElementById('presets');
+PRE.forEach(function(p){var b=document.createElement('button');b.textContent=p[0];b.onclick=function(){Object.assign(S,DEF,p[1]);sync();draw()};pr.appendChild(b)});
+var cr=document.getElementById('crops'),cbtn=[];
+CR.forEach(function(c,i){var b=document.createElement('button');b.textContent=c[0];b.onclick=function(){S.ratio=c[1];mark();draw()};cr.appendChild(b);cbtn.push(b)});
+function mark(){CR.forEach(function(c,i){cbtn[i].classList.toggle('on',S.ratio===c[1])})}
+function filt(){
+  var warm=S.w/100;
+  return 'brightness('+S.b+'%) contrast('+S.c+'%) saturate('+(S.s+S.w*0.3)+'%) hue-rotate('+S.h+'deg) sepia('+Math.round(S.w*0.45)+'%) grayscale('+S.g+'%) blur('+S.bl+'px)';
+}
+function draw(cmp){
+  if(!img)return;
+  var iw=img.width,ih=img.height,cw=iw,ch=ih;
+  if(S.ratio){if(iw/ih>S.ratio){cw=ih*S.ratio}else{ch=iw/S.ratio}}
+  var cx=(iw-cw)/2,cy=(ih-ch)/2,sw=S.rot%180!==0,W=Math.round(sw?ch:cw),H=Math.round(sw?cw:ch);
+  cv.width=W;cv.height=H;
+  ctx.filter=cmp===true?'none':filt();
+  ctx.save();ctx.translate(W/2,H/2);ctx.rotate(S.rot*Math.PI/180);ctx.scale(S.fx,S.fy);
+  ctx.drawImage(img,cx,cy,cw,ch,-cw/2,-ch/2,cw,ch);ctx.restore();
+}
+function load(f){
+  if(!f||!f.type.indexOf('image')&&0)return;
+  if(!f||f.type.indexOf('image/')!==0)return;
+  var r=new FileReader();
+  r.onload=function(){
+    var im=new Image();
+    im.onload=function(){
+      var m=Math.max(im.width,im.height),k=m>2400?2400/m:1;
+      if(k<1){var t=document.createElement('canvas');t.width=Math.round(im.width*k);t.height=Math.round(im.height*k);t.getContext('2d').drawImage(im,0,0,t.width,t.height);img=t}else{img=im}
+      Object.assign(S,DEF,{rot:0,fx:1,fy:1,ratio:0});sync();mark();
+      document.getElementById('drop').style.display='none';cv.style.display='block';draw();
+    };
+    im.src=r.result;
+  };
+  r.readAsDataURL(f);
+}
+['file','file2'].forEach(function(id){document.getElementById(id).addEventListener('change',function(e){load(e.target.files[0]);e.target.value=''})});
+var st=document.getElementById('stage'),dz=document.getElementById('drop');
+st.addEventListener('dragover',function(e){e.preventDefault();dz.classList.add('over')});
+st.addEventListener('dragleave',function(){dz.classList.remove('over')});
+st.addEventListener('drop',function(e){e.preventDefault();dz.classList.remove('over');load(e.dataTransfer.files[0])});
+document.getElementById('rl').onclick=function(){S.rot=(S.rot+270)%360;draw()};
+document.getElementById('rr').onclick=function(){S.rot=(S.rot+90)%360;draw()};
+document.getElementById('fh').onclick=function(){S.fx*=-1;draw()};
+document.getElementById('fv').onclick=function(){S.fy*=-1;draw()};
+document.getElementById('reset').onclick=function(){Object.assign(S,DEF,{rot:0,fx:1,fy:1,ratio:0});sync();mark();draw()};
+var cmp=document.getElementById('cmp');
+['mousedown','touchstart'].forEach(function(ev){cmp.addEventListener(ev,function(e){e.preventDefault();draw(true)})});
+['mouseup','mouseleave','touchend','touchcancel'].forEach(function(ev){cmp.addEventListener(ev,function(){draw()})});
+var modal=document.getElementById('modal');
+document.getElementById('save').onclick=function(){
+  if(!img)return;
+  var u=cv.toDataURL('image/png');
+  document.getElementById('out').src=u;document.getElementById('dl').href=u;modal.classList.add('open');
+};
+document.getElementById('close').onclick=function(){modal.classList.remove('open')};
+modal.addEventListener('click',function(e){if(e.target===modal)modal.classList.remove('open')});
+if(!('filter' in ctx)){document.querySelector('.hint').textContent='Your browser does not support canvas filters, so adjustments will not apply. Try Chrome, Edge or Firefox.'}
+sync();mark();
+})();
+</script>
+</body>
+</html>
